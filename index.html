@@ -219,6 +219,12 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
   background: var(--bg-toolbar); padding: 3px 10px;
   font-size: 11px; color: var(--fg-dim);
   border-top: 1px solid var(--border); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+}
+#statusbar-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#app-version {
+  font-size: 10px; color: #3a5a4a; font-family: Consolas, monospace;
+  white-space: nowrap; margin-left: 16px; flex-shrink: 0;
 }
 
 /* ── Dialog overlay ───────────────────────────────────────── */
@@ -458,7 +464,10 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 </div>
 
 <!-- ── Status bar ───────────────────────────────────────────── -->
-<div id="statusbar">Ready &mdash; open calibration files to begin</div>
+<div id="statusbar">
+  <span id="statusbar-msg">Ready &mdash; open calibration files to begin</span>
+  <span id="app-version">v1.0.0 &nbsp;|&nbsp; 2026-04-01</span>
+</div>
 
 <!-- ── Edit dialog ─────────────────────────────────────────── -->
 <div id="dialog-overlay" hidden onclick="overlayClick(event)">
@@ -1692,7 +1701,7 @@ function esc(str) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function setStatus(msg) { document.getElementById('statusbar').textContent = msg; }
+function setStatus(msg) { document.getElementById('statusbar-msg').textContent = msg; }
 </script>
 </body>
 </html>
