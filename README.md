@@ -33,16 +33,16 @@ A browser-based calibration comparator and editor for **ECUMaster EMU PRO** `.em
 Open directly in your browser — no install needed:
 
 ```
-https://<your-username>.github.io/EMU-Pro-Compare-Tool/
+https://fmirandolart.github.io/EMU-Pro-Compare-Tool/
 ```
 
 ### Offline
 
 1. Download `index.html`
-2. Open it in **Chrome** or **Edge** (Chromium-based browser recommended)
+2. Open it in any modern browser (Chrome, Edge, Firefox, Safari)
 3. Load your files
 
-> Firefox and Safari have limited support for the File System Access API. Saving works via standard browser download on all browsers.
+> The tool is fully self-contained — no internet connection required once the page is loaded. All dependencies are bundled inline.
 
 ---
 
@@ -107,9 +107,9 @@ Contributions welcome. The entire app is a single `index.html` file — no build
 
 | Library | Version | How |
 |---------|---------|-----|
-| [JSZip](https://stuk.github.io/jszip/) | 3.10.1 | CDN (loaded from cdnjs) |
+| [JSZip](https://stuk.github.io/jszip/) | 3.10.1 | Bundled inline — no CDN required |
 
-For fully offline use, download `jszip.min.js` and change the `<script src=...>` tag to point to your local copy.
+The entire app is self-contained in a single `index.html` file with no external dependencies.
 
 ---
 
