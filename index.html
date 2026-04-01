@@ -62,7 +62,12 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 }
 #toolbar .title { font-size: 15px; font-weight: 700; color: var(--fg-accent); white-space: nowrap; margin-right: 4px; }
 .sep { width: 1px; background: #555577; align-self: stretch; margin: 2px 4px; }
-.file-label { color: var(--fg-yellow); font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-group { display: flex; flex-direction: column; gap: 3px; }
+.file-name-row { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
+.file-btn-row  { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
+.file-label { color: var(--fg-yellow); font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn-saveas { background: #1a2a3a; color: #6a9acc; border: 1px solid #2a4060; font-size: 11px; }
+.btn-saveas:hover { background: #1e3a5a; color: #88bbee; }
 .btn {
   background: var(--bg-panel); color: var(--fg-main); border: none; padding: 4px 10px;
   border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap;
@@ -198,8 +203,16 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 /* Version tag in toolbar */
 .ver-tag {
   font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px;
-  background: #0a2a1a; color: #4a9a5a; border: 1px solid #1a5a2a; margin-left: 2px;
+  background: #0a2a1a; color: #4a9a5a; border: 1px solid #1a5a2a;
+  white-space: nowrap; flex-shrink: 0;
 }
+.ver-tag-b {
+  background: #0a1a2a; color: #4a7aaa; border: 1px solid #1a3a5a;
+}
+/* Orphan scope in sidebar */
+.scope-item.scope-orphans > span:first-child { color: var(--fg-yellow); }
+.scope-item.scope-orphans { border-left-color: var(--fg-yellow) !important; }
+.scope-item.scope-orphans.active { color: var(--fg-yellow); }
 
 /* ── Status bar ───────────────────────────────────────────── */
 #statusbar {
@@ -334,15 +347,31 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
   <span class="title">EMU Pro Compare Tool</span>
   <div class="sep"></div>
 
-  <span class="file-label" id="lbl-a">File A: --</span>
-  <button class="btn" onclick="triggerOpen(0)">Open A</button>
-  <button class="btn btn-green" onclick="saveFile(0)">Save A</button>
+  <div class="file-group">
+    <div class="file-name-row">
+      <span class="file-label" id="lbl-a">File A: --</span>
+      <span class="ver-tag" id="ver-a" style="display:none"></span>
+    </div>
+    <div class="file-btn-row">
+      <button class="btn" onclick="triggerOpen(0)">Open A</button>
+      <button class="btn btn-green" onclick="saveFile(0)">Save A</button>
+      <button class="btn btn-saveas" onclick="saveFileAs(0)">Save A as&hellip;</button>
+    </div>
+  </div>
 
   <div class="sep"></div>
 
-  <span class="file-label" id="lbl-b">File B: --</span>
-  <button class="btn" onclick="triggerOpen(1)">Open B</button>
-  <button class="btn btn-green" onclick="saveFile(1)">Save B</button>
+  <div class="file-group">
+    <div class="file-name-row">
+      <span class="file-label" id="lbl-b">File B: --</span>
+      <span class="ver-tag ver-tag-b" id="ver-b" style="display:none"></span>
+    </div>
+    <div class="file-btn-row">
+      <button class="btn" onclick="triggerOpen(1)">Open B</button>
+      <button class="btn btn-green" onclick="saveFile(1)">Save B</button>
+      <button class="btn btn-saveas" onclick="saveFileAs(1)">Save B as&hellip;</button>
+    </div>
+  </div>
 
   <div class="sep"></div>
 
@@ -776,8 +805,10 @@ async function loadEmuFile(file, idx) {
     state.files[idx] = new EmuFile(file.name, doc);
     const lbl = idx === 0 ? 'a' : 'b';
     const ver = state.files[idx].version;
-    document.getElementById(`lbl-${lbl}`).innerHTML =
-      `File ${lbl.toUpperCase()}: ${esc(file.name)} <span class="ver-tag">v${ver}</span>`;
+    document.getElementById(`lbl-${lbl}`).textContent = `File ${lbl.toUpperCase()}: ${file.name}`;
+    const verEl = document.getElementById(`ver-${lbl}`);
+    verEl.textContent = `v${ver}`;
+    verEl.style.display = '';
     setStatus(`Loaded ${file.name} — ${Object.keys(state.files[idx].flat).length} parameters`);
     refreshAll();
   } catch(err) {
@@ -817,6 +848,23 @@ async function saveBoth() {
     if (f) { const blob = await f.toBlob(); downloadBlob(blob, f.name); }
   }
   setStatus('Both files saved.');
+}
+
+async function saveFileAs(idx) {
+  const f = state.files[idx];
+  const label = idx === 0 ? 'A' : 'B';
+  if (!f) { alert(`No File ${label} loaded.`); return; }
+  const suggested = f.name.replace(/\.emupro$/i, '_modified.emupro');
+  const name = prompt(`Save File ${label} as:`, suggested);
+  if (!name) return;
+  try {
+    const blob = await f.toBlob();
+    const fname = name.toLowerCase().endsWith('.emupro') ? name : name + '.emupro';
+    downloadBlob(blob, fname);
+    setStatus(`Saved as: ${fname}`);
+  } catch(err) {
+    alert('Save error: ' + err.message);
+  }
 }
 
 function downloadBlob(blob, name) {
@@ -875,6 +923,7 @@ function renderCompatBanner() {
 function refreshAll() {
   buildScopeIds();
   state.compat = analyzeCompatibility();
+  buildOrphanScope();
   computeScopeDiffs();
   renderScopeList();
   renderCompatBanner();
@@ -882,8 +931,18 @@ function refreshAll() {
   const hasAny = state.files[0] || state.files[1];
   document.getElementById('drop-hint').style.display  = hasAny ? 'none' : 'flex';
   document.getElementById('table-wrap').style.display = hasAny ? 'block' : 'none';
+  // Reset scope if it no longer exists in the new list
+  if (state.currentScope && !state.scopeIds.includes(state.currentScope)) {
+    state.currentScope = null;
+  }
   if (hasAny && !state.currentScope && state.scopeIds.length) {
     state.currentScope = state.scopeIds[0];
+  }
+  if (state.currentScope) {
+    document.getElementById('content-title').textContent =
+      state.currentScope === '__orphans__'
+        ? 'Version Diff \u2014 Parameters not in both files'
+        : scopeLabel(state.currentScope);
   }
   renderTable();
 }
@@ -897,11 +956,26 @@ function buildScopeIds() {
   state.scopeIds = ids;
 }
 
+function buildOrphanScope() {
+  // Remove any stale __orphans__ entry first
+  const idx = state.scopeIds.indexOf('__orphans__');
+  if (idx !== -1) state.scopeIds.splice(idx, 1);
+  const c = state.compat;
+  if (c && (c.onlyA.length > 0 || c.onlyB.length > 0)) {
+    state.scopeIds.unshift('__orphans__');
+  }
+}
+
 function computeScopeDiffs() {
   const [fa, fb] = state.files;
   state.scopeDiffs = {};
   if (!fa && !fb) return;
   for (const sid of state.scopeIds) {
+    if (sid === '__orphans__') {
+      const c = state.compat;
+      state.scopeDiffs[sid] = c ? c.onlyA.length + c.onlyB.length : 0;
+      continue;
+    }
     const pfx = `project/scopes/${sid}/`;
     let count = 0;
     if (fa && fb) {
@@ -923,21 +997,30 @@ function renderScopeList() {
   const list = document.getElementById('scope-list');
   list.innerHTML = '';
   for (const sid of state.scopeIds) {
-    const cnt  = state.scopeDiffs[sid] || 0;
-    const item = document.createElement('div');
-    item.className = 'scope-item' + (sid === state.currentScope ? ' active' : '');
+    const cnt   = state.scopeDiffs[sid] || 0;
+    const item  = document.createElement('div');
+    const label = sid === '__orphans__' ? '\u26a0 Version Diff' : scopeLabel(sid);
+    item.className = 'scope-item'
+      + (sid === state.currentScope ? ' active' : '')
+      + (sid === '__orphans__' ? ' scope-orphans' : '');
     item.dataset.sid = sid;
-    item.innerHTML = `<span>${esc(scopeLabel(sid))}</span>`
+    item.innerHTML = `<span>${esc(label)}</span>`
       + (cnt > 0 ? `<span class="scope-badge">*${cnt}</span>` : '');
     item.onclick = () => selectScope(sid);
     list.appendChild(item);
   }
 }
 
+function scopeTitleFor(sid) {
+  return sid === '__orphans__'
+    ? 'Version Diff \u2014 Parameters not in both files'
+    : scopeLabel(sid);
+}
+
 function selectScope(sid) {
   state.currentScope = sid;
   renderScopeList();
-  document.getElementById('content-title').textContent = scopeLabel(sid);
+  document.getElementById('content-title').textContent = scopeTitleFor(sid);
   renderTable();
 }
 
@@ -948,16 +1031,21 @@ function renderTable() {
   if (!fa && !fb) return;
   if (!state.currentScope) return;
 
-  const pfx      = `project/scopes/${state.currentScope}/`;
   const filter   = document.getElementById('search-box').value.toLowerCase();
   const diffOnly = document.getElementById('diff-only-chk').checked;
 
-  // Collect paths
+  // Collect paths — __orphans__ shows all version-only params across every scope
   const seen = new Set(), paths = [];
-  for (const f of [fa, fb]) {
-    if (!f) continue;
-    for (const p of Object.keys(f.flat)) {
-      if (p.startsWith(pfx) && !seen.has(p)) { seen.add(p); paths.push(p); }
+  if (state.currentScope === '__orphans__' && state.compat) {
+    for (const p of state.compat.onlyA) { if (!seen.has(p)) { seen.add(p); paths.push(p); } }
+    for (const p of state.compat.onlyB) { if (!seen.has(p)) { seen.add(p); paths.push(p); } }
+  } else {
+    const pfx = `project/scopes/${state.currentScope}/`;
+    for (const f of [fa, fb]) {
+      if (!f) continue;
+      for (const p of Object.keys(f.flat)) {
+        if (p.startsWith(pfx) && !seen.has(p)) { seen.add(p); paths.push(p); }
+      }
     }
   }
 
