@@ -634,6 +634,11 @@ function parseDefinition(xmlDoc) {
           max:  elem.getAttribute('max')  || '',
           xChannel: xEl ? xEl.getAttribute('channel') || '' : '',
           yChannel: yEl ? yEl.getAttribute('channel') || '' : '',
+          // Engineering unit conversion
+          divider:      elem.getAttribute('divider')       || '1',
+          multiplier:   elem.getAttribute('multiplier')    || '1',
+          offset:       elem.getAttribute('offset')        || '0',
+          decimalPlaces: elem.getAttribute('decimalPlaces') || '',
         };
         for (const c of elem.children) walk(c, np);
       }
@@ -687,19 +692,77 @@ function channelShort(ch) {
   return ch.includes('/') ? ch.split('/').pop() : ch;
 }
 
+// ── Engineering unit conversion ───────────────────────────────
+function getDecimalPlaces(meta) {
+  if (!meta) return 0;
+  if (meta.decimalPlaces !== '') {
+    const dp = parseInt(meta.decimalPlaces);
+    return isNaN(dp) ? 0 : dp;
+  }
+  const mult = parseFloat(meta.multiplier) || 1;
+  const div  = parseFloat(meta.divider)    || 1;
+  if (div === 1 && mult === 1) return 0;
+  const ratio = mult / div;
+  if (ratio >= 1)     return 0;
+  if (ratio >= 0.1)   return 1;
+  if (ratio >= 0.01)  return 2;
+  if (ratio >= 0.001) return 3;
+  return 4;
+}
+
+function hasConversion(meta) {
+  if (!meta) return false;
+  return !(
+    (parseFloat(meta.divider)    || 1) === 1 &&
+    (parseFloat(meta.multiplier) || 1) === 1 &&
+    (parseFloat(meta.offset)     || 0) === 0
+  );
+}
+
+function rawToEng(rawVal, meta) {
+  if (!meta || !hasConversion(meta)) return rawVal;
+  const div    = parseFloat(meta.divider)    || 1;
+  const mult   = parseFloat(meta.multiplier) || 1;
+  const offset = parseFloat(meta.offset)     || 0;
+  return rawVal * mult / div + offset;
+}
+
+function engToRaw(engVal, meta) {
+  if (!meta || !hasConversion(meta)) return engVal;
+  const div    = parseFloat(meta.divider)    || 1;
+  const mult   = parseFloat(meta.multiplier) || 1;
+  const offset = parseFloat(meta.offset)     || 0;
+  return (engVal - offset) * div / mult;
+}
+
+function fmtEng(rawNum, meta) {
+  const eng = rawToEng(rawNum, meta);
+  const dp  = getDecimalPlaces(meta);
+  return eng.toFixed(dp);
+}
+
+// Look up definition meta for a channel/axis path (no scope prefix stripping needed)
+function axisMeta(channelPath) {
+  if (!channelPath || !state.definition) return null;
+  return state.definition.labelMap[channelPath] || null;
+}
+
 function tableSummary(ev) {
   if (!ev) return '--';
   try {
+    const meta = defLookup(ev.path);
     const nums = ev.value.trim().split(/\s+/).map(Number).filter(n => !isNaN(n));
     if (!nums.length) return ev.value.slice(0, 40);
-    const lo = Math.min(...nums), hi = Math.max(...nums);
+    const lo = rawToEng(Math.min(...nums), meta);
+    const hi = rawToEng(Math.max(...nums), meta);
+    const dp = getDecimalPlaces(meta);
     if (ev.kind === 'table') {
       const dim = ev.rows > 1 ? `${ev.rows}\u00d7${ev.cols}` : `1\u00d7${ev.cols}`;
-      return lo === hi ? `[${dim}]  ${lo}` : `[${dim}]  ${lo} ~ ${hi}`;
+      return lo === hi ? `[${dim}]  ${lo.toFixed(dp)}` : `[${dim}]  ${lo.toFixed(dp)} \u2013 ${hi.toFixed(dp)}`;
     }
     if (ev.kind === 'arrayVariable') {
       const n = nums.length;
-      return n === 1 ? `[1]  ${lo}` : `[${n}]  ${lo} ~ ${hi}`;
+      return n === 1 ? `[1]  ${lo.toFixed(dp)}` : `[${n}]  ${lo.toFixed(dp)} \u2013 ${hi.toFixed(dp)}`;
     }
   } catch {}
   return ev.value.slice(0, 60);
@@ -1171,10 +1234,23 @@ function openEditDialog(path) {
     const parts = [];
     if (meta.unit) parts.push(`Unit: ${meta.unit}`);
     if (meta.type) parts.push(`Type: ${meta.type}`);
-    if (meta.min)  parts.push(`Min: ${meta.min}`);
-    if (meta.max)  parts.push(`Max: ${meta.max}`);
+    if (meta.min)  {
+      const mn = parseFloat(meta.min);
+      parts.push(`Min: ${isNaN(mn) ? meta.min : fmtEng(mn, meta)}`);
+    }
+    if (meta.max) {
+      const mx = parseFloat(meta.max);
+      parts.push(`Max: ${isNaN(mx) ? meta.max : fmtEng(mx, meta)}`);
+    }
     if (meta.xChannel) parts.push(`X: ${channelShort(meta.xChannel)}`);
     if (meta.yChannel) parts.push(`Y: ${channelShort(meta.yChannel)}`);
+    if (hasConversion(meta)) {
+      const div  = meta.divider    !== '1' ? `÷${meta.divider}`    : '';
+      const mult = meta.multiplier !== '1' ? `×${meta.multiplier}` : '';
+      const off  = parseFloat(meta.offset) !== 0 ? `+${meta.offset}` : '';
+      const conv = [mult, div, off].filter(Boolean).join(' ');
+      if (conv) parts.push(`Scale: raw ${conv}`);
+    }
     metaEl.textContent = parts.join('   |   ');
     metaEl.style.display = parts.length ? '' : 'none';
   } else { metaEl.style.display = 'none'; }
@@ -1263,14 +1339,28 @@ function buildTabs(defs, content, tabsEl, buildFn) {
 
 // ── Table grid editor ─────────────────────────────────────────
 function buildTableGrid(panel, ev, cmpEv, evIdx) {
-  const vals   = ev.value.trim().split(/\s+/);
-  const cmpVals = cmpEv ? cmpEv.value.trim().split(/\s+/) : null;
+  const meta  = defLookup(ev.path);
+  const xMeta = axisMeta(ev.xLabel);
+  const yMeta = axisMeta(ev.yLabel);
+  const dp    = getDecimalPlaces(meta);
+
+  const rawVals = ev.value.trim().split(/\s+/);
+  const cmpRaws = cmpEv ? cmpEv.value.trim().split(/\s+/) : null;
   const { cols, rows, xData, yData, xLabel, yLabel } = ev;
   const expected = rows * cols;
-  while (vals.length < expected) vals.push('0');
+  while (rawVals.length < expected) rawVals.push('0');
 
-  const nums = vals.map(Number).filter(n => !isNaN(n));
-  const vMin = Math.min(...nums), vMax = Math.max(...nums);
+  // Convert V data to engineering for display & heat map
+  const engVals = rawVals.map(v => { const n = parseFloat(v); return isNaN(n) ? 0 : rawToEng(n, meta); });
+  const vMin = Math.min(...engVals), vMax = Math.max(...engVals);
+
+  // Convert axis breakpoints to engineering
+  const xDisp = xData.map(v => { const n = parseFloat(v); return isNaN(n) ? v : fmtEng(n, xMeta); });
+  const yDisp = yData.map(v => { const n = parseFloat(v); return isNaN(n) ? v : fmtEng(n, yMeta); });
+
+  // Axis unit suffixes for labels
+  const xUnit = xMeta ? (xMeta.unit ? ` (${xMeta.unit})` : '') : '';
+  const yUnit = yMeta ? (yMeta.unit ? ` (${yMeta.unit})` : '') : '';
 
   const wrap = document.createElement('div');
   wrap.className = 'grid-wrap';
@@ -1281,9 +1371,7 @@ function buildTableGrid(panel, ev, cmpEv, evIdx) {
   wrap.appendChild(table);
 
   const hasY = yData.length > 0;
-  const colOffset = hasY ? 1 : 0;
-
-  const inputs = [];   // flat array in row-major order
+  const inputs = [];
 
   // Axis label row
   if (xLabel || yLabel) {
@@ -1291,21 +1379,21 @@ function buildTableGrid(panel, ev, cmpEv, evIdx) {
     if (hasY) {
       const th = document.createElement('th');
       th.className = 'corner axis-label';
-      th.textContent = yLabel ? channelShort(yLabel) : '';
+      th.textContent = yLabel ? channelShort(yLabel) + yUnit : '';
       tr.appendChild(th);
     }
     const th = document.createElement('th');
     th.className = 'axis-label';
     th.colSpan = cols;
-    th.textContent = xLabel ? channelShort(xLabel) : '';
+    th.textContent = xLabel ? channelShort(xLabel) + xUnit : '';
     tr.appendChild(th);
   }
 
-  // X header row
-  if (xData.length) {
+  // X header row (converted breakpoints)
+  if (xDisp.length) {
     const tr = table.insertRow();
     if (hasY) { const th = document.createElement('th'); th.className = 'corner'; tr.appendChild(th); }
-    xData.forEach(xv => {
+    xDisp.forEach(xv => {
       const th = document.createElement('th');
       th.textContent = xv;
       tr.appendChild(th);
@@ -1315,41 +1403,40 @@ function buildTableGrid(panel, ev, cmpEv, evIdx) {
   // Data rows
   for (let r = 0; r < rows; r++) {
     const tr = table.insertRow();
-    if (hasY && r < yData.length) {
+    if (hasY && r < yDisp.length) {
       const td = document.createElement('td');
       td.className = 'y-hdr';
-      td.textContent = yData[r];
+      td.textContent = yDisp[r];
       tr.appendChild(td);
     }
     for (let c = 0; c < cols; c++) {
-      const idx = r * cols + c;
-      const raw = vals[idx] || '0';
-      const num = parseFloat(raw);
-      const style = heatStyle(isNaN(num) ? 0 : num, vMin, vMax);
-      const cmpRaw = cmpVals ? (cmpVals[idx] || '') : null;
+      const idx    = r * cols + c;
+      const eng    = engVals[idx];
+      const engStr = eng.toFixed(dp);
+      const cmpEng = cmpRaws ? fmtEng(parseFloat(cmpRaws[idx] || '0'), meta) : null;
 
-      const td  = document.createElement('td');
-      td.setAttribute('style', style);
-      if (cmpRaw !== null && valuesDiffer(raw, cmpRaw)) td.title = `Other file: ${cmpRaw}`;
+      const td = document.createElement('td');
+      td.setAttribute('style', heatStyle(eng, vMin, vMax));
+      if (cmpEng !== null && valuesDiffer(engStr, cmpEng)) td.title = `Other file: ${cmpEng}`;
 
       const input = document.createElement('input');
       input.type = 'text'; input.className = 'cell-input';
-      input.value = raw;
+      input.value = engStr;
       input.setAttribute('style', 'color:inherit');
       input.dataset.idx = idx;
-      input.addEventListener('input', () => onCellInput(input, td, inputs, vMin, vMax));
+      input.addEventListener('input', () => onCellInput(input, td, inputs));
       td.appendChild(input);
       tr.appendChild(td);
       inputs.push({ input, td });
     }
   }
 
-  dlgState.inputs[evIdx] = { kind: 'grid', inputs, rows, cols };
+  dlgState.inputs[evIdx] = { kind: 'grid', inputs, rows, cols, meta };
 }
 
-function onCellInput(changedInput, td, inputs, vMin, vMax) {
-  // Recompute min/max from all cells and update colours
+function onCellInput(changedInput, td, inputs) {
   const allNums = inputs.map(({input}) => parseFloat(input.value)).filter(n => !isNaN(n));
+  if (!allNums.length) return;
   const newMin = Math.min(...allNums), newMax = Math.max(...allNums);
   inputs.forEach(({input: inp, td: cell}) => {
     const n = parseFloat(inp.value);
@@ -1358,22 +1445,29 @@ function onCellInput(changedInput, td, inputs, vMin, vMax) {
 }
 
 function buildDiffGrid(panel, evA, evB) {
-  const valsA = evA.value.trim().split(/\s+/);
-  const valsB = evB.value.trim().split(/\s+/);
-  const { cols, rows, xData, yData, xLabel, yLabel } = evA;
+  const meta  = defLookup(evA.path);
+  const xMeta = axisMeta(evA.xLabel);
+  const yMeta = axisMeta(evA.yLabel);
+  const dp    = getDecimalPlaces(meta);
+
+  const rawsA = evA.value.trim().split(/\s+/);
+  const rawsB = evB.value.trim().split(/\s+/);
+  const { cols, rows, xData, yData } = evA;
   const expected = rows * cols;
 
+  // Compute diff in engineering units
   const diffVals = [];
   for (let i = 0; i < expected; i++) {
-    try {
-      const d = parseFloat(valsA[i]) - parseFloat(valsB[i]);
-      diffVals.push(isNaN(d) ? '?' : (d === 0 ? '=' : d.toPrecision(4)));
-    } catch { diffVals.push('?'); }
+    const ea = rawToEng(parseFloat(rawsA[i] || '0'), meta);
+    const eb = rawToEng(parseFloat(rawsB[i] || '0'), meta);
+    const d  = ea - eb;
+    diffVals.push(isNaN(d) ? '?' : (d === 0 ? '=' : d.toFixed(dp)));
   }
-  const dNums = diffVals.map(parseFloat).filter(n => !isNaN(n));
-  const dMax  = Math.max(...dNums.map(Math.abs), 1);
 
-  const wrap  = document.createElement('div');
+  const xDisp = xData.map(v => { const n = parseFloat(v); return isNaN(n) ? v : fmtEng(n, xMeta); });
+  const yDisp = yData.map(v => { const n = parseFloat(v); return isNaN(n) ? v : fmtEng(n, yMeta); });
+
+  const wrap = document.createElement('div');
   wrap.className = 'diff-grid-wrap';
   panel.appendChild(wrap);
 
@@ -1381,32 +1475,32 @@ function buildDiffGrid(panel, evA, evB) {
   table.className = 'cal-grid';
   wrap.appendChild(table);
 
-  const hasY = yData.length > 0;
+  const hasY = yDisp.length > 0;
 
-  // X header
-  if (xData.length) {
+  if (xDisp.length) {
     const tr = table.insertRow();
     if (hasY) { const th = document.createElement('th'); th.className = 'corner'; th.textContent = 'A\u2212B'; tr.appendChild(th); }
-    xData.forEach(xv => { const th = document.createElement('th'); th.textContent = xv; tr.appendChild(th); });
+    xDisp.forEach(xv => { const th = document.createElement('th'); th.textContent = xv; tr.appendChild(th); });
   }
 
   for (let r = 0; r < rows; r++) {
     const tr = table.insertRow();
-    if (hasY && r < yData.length) {
-      const td = document.createElement('td'); td.className = 'y-hdr'; td.textContent = yData[r]; tr.appendChild(td);
+    if (hasY && r < yDisp.length) {
+      const td = document.createElement('td'); td.className = 'y-hdr'; td.textContent = yDisp[r]; tr.appendChild(td);
     }
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
       const dv  = diffVals[idx];
-      const dn  = parseFloat(dv);
       const td  = document.createElement('td');
       if (dv === '=') {
         td.setAttribute('style', 'background:#1a2a1a;');
         const sp = document.createElement('span'); sp.className = 'cell-label';
         sp.textContent = '='; sp.style.color = '#4a8a4a'; td.appendChild(sp);
       } else {
-        const style = diffCellStyle(valsA[idx], valsB[idx]);
-        td.setAttribute('style', style);
+        // diffCellStyle on engineering string values
+        const eaStr = fmtEng(parseFloat(rawsA[idx] || '0'), meta);
+        const ebStr = fmtEng(parseFloat(rawsB[idx] || '0'), meta);
+        td.setAttribute('style', diffCellStyle(eaStr, ebStr));
         const sp = document.createElement('span'); sp.className = 'cell-label';
         sp.textContent = dv; td.appendChild(sp);
       }
@@ -1417,10 +1511,12 @@ function buildDiffGrid(panel, evA, evB) {
 
 // ── Array editor ──────────────────────────────────────────────
 function buildArrayEditor(panel, ev, cmpEv, evIdx) {
-  const vals    = ev.value.trim().split(/\s+/);
-  const cmpVals = cmpEv ? cmpEv.value.trim().split(/\s+/) : null;
+  const meta    = defLookup(ev.path);
+  const dp      = getDecimalPlaces(meta);
+  const rawVals = ev.value.trim().split(/\s+/);
+  const cmpRaws = cmpEv ? cmpEv.value.trim().split(/\s+/) : null;
 
-  const wrap  = document.createElement('div');
+  const wrap = document.createElement('div');
   wrap.className = 'array-wrap';
   panel.appendChild(wrap);
 
@@ -1428,9 +1524,9 @@ function buildArrayEditor(panel, ev, cmpEv, evIdx) {
   table.className = 'array-table';
   wrap.appendChild(table);
 
-  // Header
+  const unitHdr = meta && meta.unit ? ` (${meta.unit})` : '';
   const thead = table.createTHead(), htr = thead.insertRow();
-  ['#', 'Value', ...(cmpVals ? ['Other file'] : [])].forEach((h, i) => {
+  ['#', `Value${unitHdr}`, ...(cmpRaws ? [`Other file${unitHdr}`] : [])].forEach((h, i) => {
     const th = document.createElement('th');
     th.textContent = h;
     if (i === 0) th.style.width = '36px';
@@ -1440,29 +1536,36 @@ function buildArrayEditor(panel, ev, cmpEv, evIdx) {
   const tbody  = table.createTBody();
   const inputs = [];
 
-  vals.forEach((val, i) => {
-    const cmp    = cmpVals ? (cmpVals[i] || '') : null;
-    const isDiff = cmp !== null && valuesDiffer(val, cmp);
-    const tr     = tbody.insertRow();
+  rawVals.forEach((rawStr, i) => {
+    const rawNum = parseFloat(rawStr);
+    const engStr = isNaN(rawNum) ? rawStr : rawToEng(rawNum, meta).toFixed(dp);
+    const cmpRaw = cmpRaws ? (cmpRaws[i] || '') : null;
+    const cmpNum = cmpRaw !== null ? parseFloat(cmpRaw) : NaN;
+    const cmpEng = !isNaN(cmpNum) ? rawToEng(cmpNum, meta).toFixed(dp) : (cmpRaw || '');
+    const isDiff = cmpRaw !== null && valuesDiffer(engStr, cmpEng);
+
+    const tr = tbody.insertRow();
     tr.className = isDiff ? 'row-arr-diff' : (i % 2 === 0 ? 'row-even' : 'row-odd');
 
     const tdIdx = tr.insertCell(); tdIdx.className = 'idx'; tdIdx.textContent = i;
     const tdVal = tr.insertCell();
     const input = document.createElement('input');
-    input.type = 'text'; input.className = 'array-input'; input.value = val;
+    input.type = 'text'; input.className = 'array-input'; input.value = engStr;
     tdVal.appendChild(input);
     inputs.push(input);
 
-    if (cmp !== null) {
-      const tdCmp = tr.insertCell(); tdCmp.className = 'array-cmp'; tdCmp.textContent = cmp;
+    if (cmpRaw !== null) {
+      const tdCmp = tr.insertCell(); tdCmp.className = 'array-cmp'; tdCmp.textContent = cmpEng;
     }
   });
 
-  dlgState.inputs[evIdx] = { kind: 'array', inputs };
+  dlgState.inputs[evIdx] = { kind: 'array', inputs, meta };
 }
 
 // ── Variable editor ───────────────────────────────────────────
 function buildVariableEditor(content, evA, evB) {
+  const meta = defLookup(dlgState.path);
+  const dp   = getDecimalPlaces(meta);
   document.getElementById('dialog-tabs').style.display = 'none';
   const panel = document.createElement('div');
   panel.className = 'tab-panel active';
@@ -1472,8 +1575,14 @@ function buildVariableEditor(content, evA, evB) {
   row.className = 'var-edit-row';
   panel.appendChild(row);
 
+  function toDisplay(rawStr) {
+    if (!hasConversion(meta)) return rawStr;
+    const n = parseFloat(rawStr);
+    return isNaN(n) ? rawStr : rawToEng(n, meta).toFixed(dp);
+  }
+
   if (evA) {
-    const grp = makeVarGroup(`File A: ${state.files[0] ? state.files[0].name : ''}`, evA.value, 0);
+    const grp = makeVarGroup(`File A: ${state.files[0] ? state.files[0].name : ''}`, toDisplay(evA.value), 0, meta);
     row.appendChild(grp);
   }
   if (evA && evB) {
@@ -1484,12 +1593,12 @@ function buildVariableEditor(content, evA, evB) {
     row.appendChild(btns);
   }
   if (evB) {
-    const grp = makeVarGroup(`File B: ${state.files[1] ? state.files[1].name : ''}`, evB.value, 1);
+    const grp = makeVarGroup(`File B: ${state.files[1] ? state.files[1].name : ''}`, toDisplay(evB.value), 1, meta);
     row.appendChild(grp);
   }
 }
 
-function makeVarGroup(label, value, evIdx) {
+function makeVarGroup(label, value, evIdx, meta) {
   const grp = document.createElement('div');
   grp.className = 'var-edit-group';
   const lbl = document.createElement('div');
@@ -1498,7 +1607,7 @@ function makeVarGroup(label, value, evIdx) {
   inp.type = 'text'; inp.className = 'var-input'; inp.value = value;
   inp.addEventListener('keydown', e => { if (e.key === 'Enter') saveDialog(); });
   grp.appendChild(lbl); grp.appendChild(inp);
-  dlgState.inputs[evIdx] = { kind: 'variable', input: inp };
+  dlgState.inputs[evIdx] = { kind: 'variable', input: inp, meta };
   return grp;
 }
 
@@ -1534,11 +1643,24 @@ function saveDialog() {
 
     let newVal;
     if (inp.kind === 'variable') {
-      newVal = inp.input.value.trim();
+      const eng = parseFloat(inp.input.value.trim());
+      if (!isNaN(eng) && hasConversion(inp.meta)) {
+        newVal = String(Math.round(engToRaw(eng, inp.meta)));
+      } else {
+        newVal = inp.input.value.trim();
+      }
     } else if (inp.kind === 'array') {
-      newVal = inp.inputs.map(i => i.value.trim() || '0').join(' ');
+      newVal = inp.inputs.map(i => {
+        const eng = parseFloat(i.value.trim());
+        if (!isNaN(eng) && hasConversion(inp.meta)) return String(Math.round(engToRaw(eng, inp.meta)));
+        return i.value.trim() || '0';
+      }).join(' ');
     } else if (inp.kind === 'grid') {
-      newVal = inp.inputs.map(({input}) => input.value.trim() || '0').join(' ');
+      newVal = inp.inputs.map(({input}) => {
+        const eng = parseFloat(input.value.trim());
+        if (!isNaN(eng) && hasConversion(inp.meta)) return String(Math.round(engToRaw(eng, inp.meta)));
+        return input.value.trim() || '0';
+      }).join(' ');
     }
 
     const ev = file.flat[path];
