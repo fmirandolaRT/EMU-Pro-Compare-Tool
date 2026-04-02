@@ -326,6 +326,26 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 .row-arr-diff .array-input { color: var(--fg-diff); }
 .row-arr-diff .array-cmp  { color: var(--fg-diff); }
 
+/* ── Grid selection & bulk toolbar ───────────────────────── */
+.grid-toolbar {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 4px 8px; margin-bottom: 6px;
+  background: #0e1a2e; border: 1px solid #2a3a5a; border-radius: 4px;
+}
+.sel-count { color: #4cc1f0; font-size: 11px; font-weight: 700; min-width: 64px; margin-right: 4px; }
+.btn-tb {
+  padding: 2px 8px; font-size: 11px; border: 1px solid #3a5080;
+  border-radius: 3px; background: #1a2a50; color: #c8d8f8; cursor: pointer;
+}
+.btn-tb:hover { background: #2a3a70; }
+.tb-inp {
+  background: #1a2340; color: #c8d8f8; border: 1px solid #3a5080;
+  border-radius: 3px; padding: 2px 4px; font-size: 11px;
+  -moz-appearance: textfield;
+}
+.tb-inp::-webkit-outer-spin-button, .tb-inp::-webkit-inner-spin-button { -webkit-appearance: none; }
+.cal-grid td.cell-selected { outline: 2px solid #4cc1f0 !important; outline-offset: -2px; }
+
 /* ── Diff view ────────────────────────────────────────────── */
 .diff-grid-wrap { overflow: auto; padding: 8px; }
 
@@ -641,8 +661,8 @@ function parseDefinition(xmlDoc) {
           unit: elem.getAttribute('unit') || '',
           min:  elem.getAttribute('min')  || '',
           max:  elem.getAttribute('max')  || '',
-          xChannel: xEl ? xEl.getAttribute('channel') || '' : '',
-          yChannel: yEl ? yEl.getAttribute('channel') || '' : '',
+          xChannel: elem.getAttribute('xBins') || (xEl ? xEl.getAttribute('channel') || '' : ''),
+          yChannel: elem.getAttribute('yBins') || (yEl ? yEl.getAttribute('channel') || '' : ''),
           // Engineering unit conversion
           divider:      elem.getAttribute('divider')       || '1',
           multiplier:   elem.getAttribute('multiplier')    || '1',
@@ -667,7 +687,15 @@ function defLookup(path) {
   for (const pfx of ['project/scopes/', 'scopes/', 'project/']) {
     if (key.startsWith(pfx)) { key = key.slice(pfx.length); break; }
   }
-  return state.definition.labelMap[key] || null;
+  const lm = state.definition.labelMap;
+  if (lm[key]) return lm[key];
+  // Suffix fallback for complex-type paths (e.g. ignition/coils/dwellTime/base → base)
+  const parts = key.split('/');
+  for (let n = parts.length - 1; n >= 1; n--) {
+    const sfx = parts.slice(-n).join('/');
+    if (lm[sfx]) return lm[sfx];
+  }
+  return null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -1349,8 +1377,8 @@ function buildTabs(defs, content, tabsEl, buildFn) {
 // ── Table grid editor ─────────────────────────────────────────
 function buildTableGrid(panel, ev, cmpEv, evIdx) {
   const meta  = defLookup(ev.path);
-  const xMeta = axisMeta(ev.xLabel);
-  const yMeta = axisMeta(ev.yLabel);
+  const xMeta = axisMeta((meta && meta.xChannel) || ev.xLabel);
+  const yMeta = axisMeta((meta && meta.yChannel) || ev.yLabel);
   const dp    = getDecimalPlaces(meta);
 
   const rawVals = ev.value.trim().split(/\s+/);
@@ -1359,15 +1387,12 @@ function buildTableGrid(panel, ev, cmpEv, evIdx) {
   const expected = rows * cols;
   while (rawVals.length < expected) rawVals.push('0');
 
-  // Convert V data to engineering for display & heat map
   const engVals = rawVals.map(v => { const n = parseFloat(v); return isNaN(n) ? 0 : rawToEng(n, meta); });
   const vMin = Math.min(...engVals), vMax = Math.max(...engVals);
 
-  // Convert axis breakpoints to engineering
   const xDisp = xData.map(v => { const n = parseFloat(v); return isNaN(n) ? v : fmtEng(n, xMeta); });
   const yDisp = yData.map(v => { const n = parseFloat(v); return isNaN(n) ? v : fmtEng(n, yMeta); });
 
-  // Axis unit suffixes for labels
   const xUnit = xMeta ? (xMeta.unit ? ` (${xMeta.unit})` : '') : '';
   const yUnit = yMeta ? (yMeta.unit ? ` (${yMeta.unit})` : '') : '';
 
@@ -1375,14 +1400,121 @@ function buildTableGrid(panel, ev, cmpEv, evIdx) {
   wrap.className = 'grid-wrap';
   panel.appendChild(wrap);
 
+  // ── Selection state ──────────────────────────────────────────
+  const inputs = [];
+  const selSet = new Set();
+  let anchorIdx = -1, isDragging = false;
+
+  function reHeat() {
+    const nums = inputs.map(({input}) => parseFloat(input.value)).filter(n => !isNaN(n));
+    if (!nums.length) return;
+    const lo = Math.min(...nums), hi = Math.max(...nums);
+    inputs.forEach(({input: inp, td: cell}) => {
+      const n = parseFloat(inp.value);
+      if (!isNaN(n)) cell.setAttribute('style', heatStyle(n, lo, hi));
+    });
+  }
+
+  function updateTb() {
+    if (selSet.size === 0) { tb.style.display = 'none'; return; }
+    tb.style.display = 'flex';
+    selCount.textContent = `${selSet.size} cell${selSet.size !== 1 ? 's' : ''}`;
+  }
+
+  function setSel(i, v) {
+    if (v) selSet.add(i); else selSet.delete(i);
+    if (inputs[i]) inputs[i].td.classList.toggle('cell-selected', v);
+  }
+
+  function clearSel() {
+    [...selSet].forEach(i => { selSet.delete(i); if (inputs[i]) inputs[i].td.classList.remove('cell-selected'); });
+  }
+
+  function rectIdxs(a, b) {
+    const ar = Math.floor(a / cols), ac = a % cols, br = Math.floor(b / cols), bc = b % cols;
+    const r0 = Math.min(ar, br), r1 = Math.max(ar, br), c0 = Math.min(ac, bc), c1 = Math.max(ac, bc);
+    const out = [];
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) out.push(r * cols + c);
+    return out;
+  }
+
+  // ── Bulk action toolbar ──────────────────────────────────────
+  const tb = document.createElement('div');
+  tb.className = 'grid-toolbar'; tb.style.display = 'none';
+  wrap.appendChild(tb);
+
+  const selCount = document.createElement('span');
+  selCount.className = 'sel-count';
+  tb.appendChild(selCount);
+
+  function tbInp(ph, w) {
+    const i = document.createElement('input');
+    i.type = 'number'; i.placeholder = ph; i.className = 'tb-inp'; i.style.width = w + 'px';
+    return i;
+  }
+  function tbBtn(lbl, title) {
+    const b = document.createElement('button'); b.textContent = lbl; b.className = 'btn-tb';
+    if (title) b.title = title;
+    return b;
+  }
+
+  const fillInp  = tbInp('value', 72);   const fillBtn  = tbBtn('Fill', 'Set selected cells to this value');
+  const deltaInp = tbInp('amount', 66);  const addBtn   = tbBtn('+', 'Add amount to selected cells');
+                                          const subBtn   = tbBtn('−', 'Subtract amount from selected cells');
+  const pctInp   = tbInp('%', 50);        const pctBtn   = tbBtn('Scale%', 'Multiply selected cells by (1 + %/100)');
+  const otherIdx = evIdx === 0 ? 1 : 0;
+  const copyToBtn   = tbBtn(evIdx === 0 ? '→B' : '→A', 'Copy selected cells to other file');
+  const copyFromBtn = tbBtn(evIdx === 0 ? '←B' : '←A', 'Paste from other file into selected cells');
+  const clearBtn    = tbBtn('✕', 'Clear selection');
+
+  [fillInp, fillBtn, deltaInp, addBtn, subBtn, pctInp, pctBtn, copyToBtn, copyFromBtn, clearBtn]
+    .forEach(el => tb.appendChild(el));
+
+  fillBtn.addEventListener('click', () => {
+    const v = parseFloat(fillInp.value); if (isNaN(v)) return;
+    selSet.forEach(i => { inputs[i].input.value = v.toFixed(dp); });
+    reHeat();
+  });
+  addBtn.addEventListener('click', () => {
+    const d = parseFloat(deltaInp.value); if (isNaN(d)) return;
+    selSet.forEach(i => { const cur = parseFloat(inputs[i].input.value) || 0; inputs[i].input.value = (cur + d).toFixed(dp); });
+    reHeat();
+  });
+  subBtn.addEventListener('click', () => {
+    const d = parseFloat(deltaInp.value); if (isNaN(d)) return;
+    selSet.forEach(i => { const cur = parseFloat(inputs[i].input.value) || 0; inputs[i].input.value = (cur - d).toFixed(dp); });
+    reHeat();
+  });
+  pctBtn.addEventListener('click', () => {
+    const p = parseFloat(pctInp.value); if (isNaN(p)) return;
+    const f = 1 + p / 100;
+    selSet.forEach(i => { const cur = parseFloat(inputs[i].input.value) || 0; inputs[i].input.value = (cur * f).toFixed(dp); });
+    reHeat();
+  });
+  copyToBtn.addEventListener('click', () => {
+    const other = dlgState.inputs[otherIdx];
+    if (!other || other.kind !== 'grid') return;
+    selSet.forEach(i => { if (i < other.inputs.length) other.inputs[i].input.value = inputs[i].input.value; });
+    const nums = other.inputs.map(({input}) => parseFloat(input.value)).filter(n => !isNaN(n));
+    if (nums.length) { const lo = Math.min(...nums), hi = Math.max(...nums); other.inputs.forEach(({input: inp, td: cell}) => { const n = parseFloat(inp.value); if (!isNaN(n)) cell.setAttribute('style', heatStyle(n, lo, hi)); }); }
+  });
+  copyFromBtn.addEventListener('click', () => {
+    const other = dlgState.inputs[otherIdx];
+    if (!other || other.kind !== 'grid') return;
+    selSet.forEach(i => { if (i < other.inputs.length) inputs[i].input.value = other.inputs[i].input.value; });
+    reHeat();
+  });
+  clearBtn.addEventListener('click', () => { clearSel(); updateTb(); });
+
+  document.addEventListener('mouseup', () => { isDragging = false; });
+
+  // ── Table ────────────────────────────────────────────────────
   const table = document.createElement('table');
   table.className = 'cal-grid';
   wrap.appendChild(table);
 
   const hasY = yData.length > 0;
-  const inputs = [];
 
-  // Axis label row
   if (xLabel || yLabel) {
     const tr = table.insertRow();
     if (hasY) {
@@ -1398,7 +1530,6 @@ function buildTableGrid(panel, ev, cmpEv, evIdx) {
     tr.appendChild(th);
   }
 
-  // X header row (converted breakpoints)
   if (xDisp.length) {
     const tr = table.insertRow();
     if (hasY) { const th = document.createElement('th'); th.className = 'corner'; tr.appendChild(th); }
@@ -1409,7 +1540,6 @@ function buildTableGrid(panel, ev, cmpEv, evIdx) {
     });
   }
 
-  // Data rows
   for (let r = 0; r < rows; r++) {
     const tr = table.insertRow();
     if (hasY && r < yDisp.length) {
@@ -1437,6 +1567,32 @@ function buildTableGrid(panel, ev, cmpEv, evIdx) {
       td.appendChild(input);
       tr.appendChild(td);
       inputs.push({ input, td });
+
+      // Cell selection
+      td.addEventListener('mousedown', e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        if (e.shiftKey && anchorIdx >= 0) {
+          clearSel();
+          rectIdxs(anchorIdx, idx).forEach(i => setSel(i, true));
+        } else if (e.ctrlKey || e.metaKey) {
+          const was = selSet.has(idx);
+          setSel(idx, !was);
+          if (!was) anchorIdx = idx;
+        } else {
+          clearSel();
+          setSel(idx, true);
+          anchorIdx = idx;
+          isDragging = true;
+        }
+        updateTb();
+      });
+      td.addEventListener('mouseover', () => {
+        if (!isDragging) return;
+        clearSel();
+        rectIdxs(anchorIdx, idx).forEach(i => setSel(i, true));
+        updateTb();
+      });
     }
   }
 
@@ -1455,8 +1611,8 @@ function onCellInput(changedInput, td, inputs) {
 
 function buildDiffGrid(panel, evA, evB) {
   const meta  = defLookup(evA.path);
-  const xMeta = axisMeta(evA.xLabel);
-  const yMeta = axisMeta(evA.yLabel);
+  const xMeta = axisMeta((meta && meta.xChannel) || evA.xLabel);
+  const yMeta = axisMeta((meta && meta.yChannel) || evA.yLabel);
   const dp    = getDecimalPlaces(meta);
 
   const rawsA = evA.value.trim().split(/\s+/);
