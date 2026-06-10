@@ -345,6 +345,8 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 }
 .tb-inp::-webkit-outer-spin-button, .tb-inp::-webkit-inner-spin-button { -webkit-appearance: none; }
 .cal-grid td.cell-selected { outline: 2px solid #4cc1f0 !important; outline-offset: -2px; }
+.array-table tr.row-selected td { background: #13335f !important; box-shadow: inset 0 0 0 1px #4cc1f0; }
+.array-table td.idx { cursor: pointer; user-select: none; }
 
 /* ── Diff view ────────────────────────────────────────────── */
 .diff-grid-wrap { overflow: auto; padding: 8px; }
@@ -487,7 +489,7 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 <!-- ── Status bar ───────────────────────────────────────────── -->
 <div id="statusbar">
   <span id="statusbar-msg">Ready &mdash; open calibration files to begin</span>
-  <span id="app-version">v1.2.0 &nbsp;|&nbsp; 2026-06-10</span>
+  <span id="app-version">v1.3.0 &nbsp;|&nbsp; 2026-06-10</span>
 </div>
 
 <!-- ── Edit dialog ─────────────────────────────────────────── -->
@@ -605,10 +607,11 @@ async function autoLoadDefinition() {
 // ── EmuFile ───────────────────────────────────────────────────
 class EmuFile {
   constructor(name, xmlDoc) {
-    this.name    = name;
-    this.xmlDoc  = xmlDoc;
-    this.version = extractVersion(xmlDoc);
-    this.flat    = {};
+    this.name     = name;
+    this.xmlDoc   = xmlDoc;
+    this.version  = extractVersion(xmlDoc);
+    this.modified = false;
+    this.flat     = {};
     this._flatten(xmlDoc.documentElement, '');
   }
 
@@ -669,6 +672,7 @@ class EmuFile {
       ev.vEl.setAttribute('data', newVal);
     }
     ev.value = newVal;
+    this.modified = true;
   }
 
   getScopeIds() {
@@ -952,7 +956,7 @@ async function loadEmuFile(file, idx) {
     state.files[idx] = new EmuFile(file.name, doc);
     const lbl = idx === 0 ? 'a' : 'b';
     const ver = state.files[idx].version;
-    document.getElementById(`lbl-${lbl}`).textContent = `File ${lbl.toUpperCase()}: ${file.name}`;
+    updateFileLabels();
     const verEl = document.getElementById(`ver-${lbl}`);
     verEl.textContent = `v${ver}`;
     verEl.style.display = '';
@@ -979,31 +983,43 @@ async function loadDefinition(file) {
   }
 }
 
+// Edited files are never saved under their original name: the download gets an
+// "_edited" suffix so the source calibration on disk is always preserved.
+function editedName(name) {
+  const base = name.replace(/(?:_edited)?\.emupro$/i, '');
+  return base + '_edited.emupro';
+}
+function saveName(f) {
+  return f.modified ? editedName(f.name) : f.name;
+}
+
 async function saveFile(idx) {
   const f = state.files[idx];
   if (!f) { alert(`No File ${idx === 0 ? 'A' : 'B'} loaded.`); return; }
   try {
-    const blob = await f.toBlob();
-    downloadBlob(blob, f.name);
-    setStatus('Saved: ' + f.name);
+    const blob  = await f.toBlob();
+    const fname = saveName(f);
+    downloadBlob(blob, fname);
+    setStatus('Saved: ' + fname + (f.modified ? ' (original preserved)' : ''));
   } catch(err) {
     alert('Save error: ' + err.message);
   }
 }
 
 async function saveBoth() {
+  const saved = [];
   for (const idx of [0, 1]) {
     const f = state.files[idx];
-    if (f) { const blob = await f.toBlob(); downloadBlob(blob, f.name); }
+    if (f) { const blob = await f.toBlob(); const fname = saveName(f); downloadBlob(blob, fname); saved.push(fname); }
   }
-  setStatus('Both files saved.');
+  setStatus(saved.length ? 'Saved: ' + saved.join(', ') : 'No files loaded.');
 }
 
 async function saveFileAs(idx) {
   const f = state.files[idx];
   const label = idx === 0 ? 'A' : 'B';
   if (!f) { alert(`No File ${label} loaded.`); return; }
-  const suggested = f.name.replace(/\.emupro$/i, '_modified.emupro');
+  const suggested = editedName(f.name);
   const name = prompt(`Save File ${label} as:`, suggested);
   if (!name) return;
   try {
@@ -1014,6 +1030,18 @@ async function saveFileAs(idx) {
   } catch(err) {
     alert('Save error: ' + err.message);
   }
+}
+
+function updateFileLabels() {
+  [[0, 'a'], [1, 'b']].forEach(([idx, lbl]) => {
+    const f = state.files[idx];
+    if (!f) return;
+    const el = document.getElementById(`lbl-${lbl}`);
+    el.textContent = `File ${lbl.toUpperCase()}: ${f.name}${f.modified ? ' ● edited' : ''}`;
+    el.title = f.modified
+      ? `Modified — will save as ${editedName(f.name)} (original preserved)`
+      : f.name;
+  });
 }
 
 function downloadBlob(blob, name) {
@@ -1346,9 +1374,10 @@ function openEditDialog(path) {
   const dimEl = document.getElementById('dialog-dim');
   if (kind === 'table') {
     const rows = ev.rows, cols = ev.cols;
-    dimEl.textContent = rows > 1
+    dimEl.textContent = (rows > 1
       ? `Table: ${rows} rows (Y-axis) \u00d7 ${cols} cols (X-axis) = ${rows*cols} cells`
-      : `Table: 1 \u00d7 ${cols} cells`;
+      : `Table: 1 \u00d7 ${cols} cells`)
+      + ' \u2014 drag to select cells (Shift-click: range, Ctrl-click: toggle), then use A\u2192B / B\u2192A to copy';
     dimEl.style.display = '';
   } else { dimEl.style.display = 'none'; }
 
@@ -1513,8 +1542,8 @@ function buildTableGrid(panel, ev, cmpEv, evIdx) {
                                           const subBtn   = tbBtn('−', 'Subtract amount from selected cells');
   const pctInp   = tbInp('%', 50);        const pctBtn   = tbBtn('Scale%', 'Multiply selected cells by (1 + %/100)');
   const otherIdx = evIdx === 0 ? 1 : 0;
-  const copyToBtn   = tbBtn(evIdx === 0 ? '→B' : '→A', 'Copy selected cells to other file');
-  const copyFromBtn = tbBtn(evIdx === 0 ? '←B' : '←A', 'Paste from other file into selected cells');
+  const copyToBtn   = tbBtn(evIdx === 0 ? 'A→B' : 'B→A', 'Copy selected cells to the other file');
+  const copyFromBtn = tbBtn(evIdx === 0 ? 'B→A' : 'A→B', 'Copy the other file’s values into the selected cells');
   const clearBtn    = tbBtn('✕', 'Clear selection');
 
   [fillInp, fillBtn, deltaInp, addBtn, subBtn, pctInp, pctBtn, copyToBtn, copyFromBtn, clearBtn]
@@ -1735,6 +1764,49 @@ function buildArrayEditor(panel, ev, cmpEv, evIdx) {
   wrap.className = 'array-wrap';
   panel.appendChild(wrap);
 
+  // ── Row selection toolbar (click # column to select rows) ───
+  const otherIdx = evIdx === 0 ? 1 : 0;
+  const selSet = new Set();
+  const trs = [];
+  let anchorIdx = -1;
+
+  const tb = document.createElement('div');
+  tb.className = 'grid-toolbar'; tb.style.display = 'none';
+  wrap.appendChild(tb);
+  const selCount = document.createElement('span');
+  selCount.className = 'sel-count';
+  tb.appendChild(selCount);
+
+  function arrBtn(lbl, title) {
+    const b = document.createElement('button'); b.textContent = lbl; b.className = 'btn-tb'; b.title = title;
+    tb.appendChild(b); return b;
+  }
+  const copyToBtn   = arrBtn(evIdx === 0 ? 'A→B' : 'B→A', 'Copy selected rows to the other file');
+  const copyFromBtn = arrBtn(evIdx === 0 ? 'B→A' : 'A→B', 'Copy the other file’s values into the selected rows');
+  const clearSelBtn = arrBtn('✕', 'Clear selection');
+
+  function updateTb() {
+    tb.style.display = selSet.size ? 'flex' : 'none';
+    selCount.textContent = `${selSet.size} row${selSet.size !== 1 ? 's' : ''}`;
+  }
+  function setSel(i, v) {
+    if (v) selSet.add(i); else selSet.delete(i);
+    if (trs[i]) trs[i].classList.toggle('row-selected', v);
+  }
+  function clearSel() { [...selSet].forEach(i => setSel(i, false)); }
+
+  copyToBtn.addEventListener('click', () => {
+    const other = dlgState.inputs[otherIdx];
+    if (!other || other.kind !== 'array') return;
+    selSet.forEach(i => { if (i < other.inputs.length) other.inputs[i].value = inputs[i].value; });
+  });
+  copyFromBtn.addEventListener('click', () => {
+    const other = dlgState.inputs[otherIdx];
+    if (!other || other.kind !== 'array') return;
+    selSet.forEach(i => { if (i < other.inputs.length) inputs[i].value = other.inputs[i].value; });
+  });
+  clearSelBtn.addEventListener('click', () => { clearSel(); updateTb(); });
+
   const table = document.createElement('table');
   table.className = 'array-table';
   wrap.appendChild(table);
@@ -1762,7 +1834,27 @@ function buildArrayEditor(panel, ev, cmpEv, evIdx) {
     const tr = tbody.insertRow();
     tr.className = isDiff ? 'row-arr-diff' : (i % 2 === 0 ? 'row-even' : 'row-odd');
 
+    trs.push(tr);
     const tdIdx = tr.insertCell(); tdIdx.className = 'idx'; tdIdx.textContent = i;
+    tdIdx.title = 'Click to select row (Shift: range, Ctrl: toggle)';
+    tdIdx.addEventListener('mousedown', e => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      if (e.shiftKey && anchorIdx >= 0) {
+        clearSel();
+        const lo = Math.min(anchorIdx, i), hi = Math.max(anchorIdx, i);
+        for (let k = lo; k <= hi; k++) setSel(k, true);
+      } else if (e.ctrlKey || e.metaKey) {
+        const was = selSet.has(i);
+        setSel(i, !was);
+        if (!was) anchorIdx = i;
+      } else {
+        clearSel();
+        setSel(i, true);
+        anchorIdx = i;
+      }
+      updateTb();
+    });
     const tdVal = tr.insertCell();
     const input = document.createElement('input');
     input.type = 'text'; input.className = 'array-input'; input.value = engStr;
@@ -1890,7 +1982,8 @@ function saveDialog() {
     computeScopeDiffs();
     renderScopeList();
     renderTable();
-    setStatus('Updated: ' + path.split('/').pop());
+    updateFileLabels();
+    setStatus('Updated: ' + path.split('/').pop() + ' — edits save under a new _edited file name');
   }
 }
 

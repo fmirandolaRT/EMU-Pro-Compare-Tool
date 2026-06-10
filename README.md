@@ -21,6 +21,8 @@ A browser-based calibration comparator and editor for **ECUMaster EMU PRO** `.em
 - **Search / filter** parameters by name
 - **Diff-only mode** — show only changed parameters
 - **Sort** any column
+- **Multi-cell copy between files** — select cells in a table (drag / Shift / Ctrl) or rows in an array (click the # column) and copy values A→B or B→A
+- **Original file always preserved** — edited files are saved under a new `*_edited.emupro` name; the source calibration is never overwritten
 - **Save** modified files back as valid `.emupro` (browser download)
 - **Built-in definitions** — parameter names, units, conversions, and axis labels for all firmware versions (0.90 – 2.30) are embedded and load automatically based on file version
 
@@ -77,16 +79,23 @@ priority over the built-in ones.
 | Dismiss without saving | Click **Cancel** or press Escape |
 | Save file | **Save A**, **Save B**, or **Save Both** — downloads the modified `.emupro` |
 
+> **Original files are never overwritten.** As soon as a change is applied, the file
+> is marked `● edited` in the toolbar and any save downloads it as
+> `<name>_edited.emupro`, keeping your original calibration intact.
+
 ### Table editor
 
 - Full heat-mapped grid with X/Y axis headers
 - Each cell is editable; colours update live as you type
+- **Multi-cell selection** — drag to select a block, Shift-click for a range, Ctrl-click to toggle single cells
+- **Bulk operations on the selection** — Fill, +/− amount, Scale %, and **A→B / B→A copy** to move values between the two files
 - **Diff A−B tab** shows the cell-by-cell difference between the two files
 
 ### Array editor
 
 - Indexed list with the other file's values shown alongside for comparison
 - Rows with differences are highlighted
+- **Row selection** — click the `#` column (Shift: range, Ctrl: toggle), then **A→B / B→A copy** between files
 
 ---
 
