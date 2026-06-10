@@ -208,6 +208,9 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 #identical-banner.show { display: flex; align-items: center; gap: 10px; }
 .identical-title { font-weight: 700; color: #5fce7f; white-space: nowrap; }
 .identical-body  { color: var(--fg-dim); }
+/* Empty-state row in the parameter table */
+#param-table td.empty-msg { text-align: center; padding: 32px 12px; color: var(--fg-dim); font-size: 13px; }
+#param-table td.empty-msg.empty-ok { color: #5fce7f; }
 /* Version tag in toolbar */
 .ver-tag {
   font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px;
@@ -503,7 +506,7 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 <!-- ── Status bar ───────────────────────────────────────────── -->
 <div id="statusbar">
   <span id="statusbar-msg">Ready &mdash; open calibration files to begin</span>
-  <span id="app-version">v1.4.0 &nbsp;|&nbsp; 2026-06-10</span>
+  <span id="app-version">v1.4.1 &nbsp;|&nbsp; 2026-06-10</span>
 </div>
 
 <!-- ── Edit dialog ─────────────────────────────────────────── -->
@@ -1324,8 +1327,7 @@ function renderTable() {
 
   // Render
   tbody.innerHTML = '';
-  for (const r of rows) {
-    const tr = document.createElement('tr');
+  for (const r of rows) {    const tr = document.createElement('tr');
     tr.className = r.rowClass;
     tr.dataset.path = r.path;
     tr.ondblclick = () => openEditDialog(r.path);
@@ -1339,6 +1341,28 @@ function renderTable() {
       <td class="col-val">${r.htmlB}</td>
       <td class="col-unit">${esc(r.unit)}</td>
       <td class="col-type" title="${esc(r.type)}">${esc(r.type)}</td>`;
+    tbody.appendChild(tr);
+  }
+
+  // Empty-state message when filters leave nothing to show
+  if (rows.length === 0) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 5;
+    td.className = 'empty-msg';
+    if (paths.length === 0) {
+      td.textContent = 'No parameters in this scope.';
+    } else if (diffOnly && diffCount === 0) {
+      td.classList.add('empty-ok');
+      td.textContent = `✔ No differences found in this scope — `
+        + `${paths.length} identical parameter${paths.length !== 1 ? 's' : ''} hidden by “Diff only”.`;
+    } else if (filter) {
+      td.textContent = `No parameters matching “${document.getElementById('search-box').value}”`
+        + (diffOnly ? ' among the differences.' : '.');
+    } else {
+      td.textContent = 'Nothing to show.';
+    }
+    tr.appendChild(td);
     tbody.appendChild(tr);
   }
 
