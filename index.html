@@ -489,7 +489,7 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 <!-- ── Status bar ───────────────────────────────────────────── -->
 <div id="statusbar">
   <span id="statusbar-msg">Ready &mdash; open calibration files to begin</span>
-  <span id="app-version">v1.3.0 &nbsp;|&nbsp; 2026-06-10</span>
+  <span id="app-version">v1.3.1 &nbsp;|&nbsp; 2026-06-10</span>
 </div>
 
 <!-- ── Edit dialog ─────────────────────────────────────────── -->
@@ -683,8 +683,12 @@ class EmuFile {
 
   async toBlob() {
     const ser = new XMLSerializer();
-    const xmlStr = '<?xml version="1.0" encoding="UTF-8"?>\n'
-                 + ser.serializeToString(this.xmlDoc);
+    // XMLSerializer may already emit an XML declaration (Chrome does when the
+    // parsed document had one) — strip it so we never write a duplicate,
+    // which would make the file unreadable for strict XML parsers.
+    const body = ser.serializeToString(this.xmlDoc)
+                    .replace(/^<\?xml[^>]*\?>\s*/, '');
+    const xmlStr = '<?xml version="1.0" encoding="UTF-8"?>\n' + body + '\n';
     const zip = new JSZip();
     zip.file('project.emupro', xmlStr);
     return zip.generateAsync({ type: 'blob', compression: 'DEFLATE',
@@ -952,7 +956,14 @@ async function loadEmuFile(file, idx) {
     const buf  = await file.arrayBuffer();
     const zip  = await JSZip.loadAsync(buf);
     const xml  = await zip.file('project.emupro').async('string');
-    const doc  = new DOMParser().parseFromString(xml, 'application/xml');
+    // Tolerate files saved by older tool versions with a duplicated XML
+    // declaration (a save bug fixed in v1.3.1) — keep only the first one.
+    const cleaned = xml.replace(/(<\?xml[^>]*\?>\s*)(?:<\?xml[^>]*\?>\s*)+/, '$1');
+    const doc  = new DOMParser().parseFromString(cleaned, 'application/xml');
+    if (doc.querySelector('parsererror')) {
+      throw new Error('project.emupro is not valid XML: '
+        + doc.querySelector('parsererror').textContent.trim().split('\n')[0]);
+    }
     state.files[idx] = new EmuFile(file.name, doc);
     const lbl = idx === 0 ? 'a' : 'b';
     const ver = state.files[idx].version;
