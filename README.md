@@ -22,7 +22,7 @@ A browser-based calibration comparator and editor for **ECUMaster EMU PRO** `.em
 - **Diff-only mode** — show only changed parameters
 - **Sort** any column
 - **Save** modified files back as valid `.emupro` (browser download)
-- **Definition file support** — load `project0_226.xml` for human-readable parameter names, units, and axis labels
+- **Built-in definitions** — parameter names, units, conversions, and axis labels for all firmware versions (0.90 – 2.30) are embedded and load automatically based on file version
 
 ---
 
@@ -53,12 +53,17 @@ https://fmirandolart.github.io/EMU-Pro-Compare-Tool/
 | Click **Open A / Open B** | Opens a file picker |
 | **Drag & drop** | Drop an `.emupro` file onto the File A or File B drop zone |
 
-### Optional: Definition file
+### Definition files (built in)
 
-Load `project0_226.xml` (from your ECUMaster install at
-`C:\Program Files (x86)\Ecumaster\EMU PRO\Xml\PRO\Project\`) via the **Definition XML…** button.
-This enables human-readable parameter names, units, min/max values, and axis labels.
-The tool works without it, falling back to raw parameter IDs.
+Definitions for all EMU PRO firmware versions (`project0_090.xml` … `project0_230.xml`)
+are embedded in the tool and applied automatically — the right one is picked from the
+version of the loaded `.emupro` file (the newer of the two when comparing mixed versions).
+This enables human-readable parameter names, units, min/max values, and axis labels
+with nothing to download or configure.
+
+To override with a custom definition (e.g. a newer firmware than the tool ships with),
+load it via the **Definition XML…** button — a manually loaded definition always takes
+priority over the built-in ones.
 
 ---
 
@@ -90,7 +95,7 @@ The tool works without it, falling back to raw parameter IDs.
 `.emupro` files are ZIP archives containing a single `project.emupro` XML file.
 This tool reads and writes that format directly — no conversion needed.
 
-Compatible with **EMU PRO firmware 226**.
+Compatible with **EMU PRO firmware 0.90 – 2.30** (built-in definitions for every released version).
 
 ---
 
