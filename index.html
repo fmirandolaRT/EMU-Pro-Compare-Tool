@@ -200,6 +200,14 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 .pill-b   { background: #1a2a4a; color: #7aa8e0; }
 .pill-diff { background: #4a1a1a; color: #ff8866; }
 .compat-def-hint { color: #556688; font-size: 11px; margin-top: 3px; }
+/* Identical-files banner */
+#identical-banner {
+  background: #0e2417; border-bottom: 1px solid #1a5a2a;
+  padding: 8px 14px; font-size: 12px; flex-shrink: 0; display: none;
+}
+#identical-banner.show { display: flex; align-items: center; gap: 10px; }
+.identical-title { font-weight: 700; color: #5fce7f; white-space: nowrap; }
+.identical-body  { color: var(--fg-dim); }
 /* Version tag in toolbar */
 .ver-tag {
   font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px;
@@ -445,6 +453,12 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
       </div>
     </div>
 
+    <!-- Identical-files banner (shown when both files match exactly) -->
+    <div id="identical-banner">
+      <span class="identical-title">&#10004; Files are identical</span>
+      <span class="identical-body" id="identical-body"></span>
+    </div>
+
     <!-- Drop hint (shown when no files) -->
     <div id="drop-hint">
       <div class="drop-pair">
@@ -489,7 +503,7 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 <!-- ── Status bar ───────────────────────────────────────────── -->
 <div id="statusbar">
   <span id="statusbar-msg">Ready &mdash; open calibration files to begin</span>
-  <span id="app-version">v1.3.1 &nbsp;|&nbsp; 2026-06-10</span>
+  <span id="app-version">v1.4.0 &nbsp;|&nbsp; 2026-06-10</span>
 </div>
 
 <!-- ── Edit dialog ─────────────────────────────────────────── -->
@@ -1108,6 +1122,23 @@ function renderCompatBanner() {
   }
 }
 
+function renderIdenticalBanner() {
+  const banner = document.getElementById('identical-banner');
+  const c = state.compat;
+  let identical = c && !c.isMixed && c.onlyA.length === 0 && c.onlyB.length === 0;
+  if (identical) {
+    const [fa, fb] = state.files;
+    for (const [p, evA] of Object.entries(fa.flat)) {
+      if (valuesDiffer(evA.value, fb.flat[p].value)) { identical = false; break; }
+    }
+    if (identical) {
+      document.getElementById('identical-body').textContent =
+        `No differences found — all ${Object.keys(fa.flat).length} parameters match between ${fa.name} and ${fb.name}.`;
+    }
+  }
+  banner.classList.toggle('show', !!identical);
+}
+
 // ── Scope list ────────────────────────────────────────────────
 function refreshAll() {
   buildScopeIds();
@@ -1116,6 +1147,7 @@ function refreshAll() {
   computeScopeDiffs();
   renderScopeList();
   renderCompatBanner();
+  renderIdenticalBanner();
   // Show/hide panels
   const hasAny = state.files[0] || state.files[1];
   document.getElementById('drop-hint').style.display  = hasAny ? 'none' : 'flex';
@@ -1994,6 +2026,7 @@ function saveDialog() {
     renderScopeList();
     renderTable();
     updateFileLabels();
+    renderIdenticalBanner();
     setStatus('Updated: ' + path.split('/').pop() + ' — edits save under a new _edited file name');
   }
 }
