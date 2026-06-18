@@ -79,6 +79,8 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
 .btn-save-both:hover { background: #3a6030; }
 .btn-dim { background: transparent; color: var(--fg-dim); border: 1px solid #333355; font-size: 11px; }
 .btn-dim:hover { color: var(--fg-main); border-color: #556688; }
+.btn-export { background: #1a3a4a; color: #4cc9f0; border: 1px solid #2a5060; font-size: 11px; }
+.btn-export:hover { background: #1e4a60; color: #7dd8f7; }
 #search-box {
   background: var(--bg-table); color: var(--fg-main); border: 1px solid var(--border);
   padding: 3px 8px; border-radius: 3px; font-size: 12px; width: 180px;
@@ -423,6 +425,7 @@ body { background: var(--bg-main); color: var(--fg-main); display: flex; flex-di
   <div style="flex:1"></div>
 
   <button class="btn btn-dim" onclick="triggerDef()">Definition XML...</button>
+  <button class="btn btn-export" onclick="exportHTML()" title="Export comparison as a printable HTML report">&#8659; Export</button>
   <button class="btn btn-save-both" onclick="saveBoth()">Save Both</button>
 </div>
 
@@ -2069,6 +2072,175 @@ function esc(str) {
 }
 
 function setStatus(msg) { document.getElementById('statusbar-msg').textContent = msg; }
+
+// ── Export ─────────────────────────────────────────────────────
+function exportHTML() {
+  const [fa, fb] = state.files;
+  if (!fa && !fb) { alert('Load at least one file before exporting.'); return; }
+
+  const nameA = fa ? fa.name : '(none)';
+  const nameB = fb ? fb.name : '(none)';
+  const vA    = fa ? fa.version : '?';
+  const vB    = fb ? fb.version : '?';
+  const now   = new Date().toLocaleString();
+
+  // Collect rows across all scopes
+  const sections = [];
+  for (const sid of state.scopeIds) {
+    const rows = collectScopeRows(sid, fa, fb);
+    if (rows.length > 0) sections.push({ sid, rows });
+  }
+
+  const totalDiffs = sections.reduce((s, sec) => s + sec.rows.filter(r => r.isDiff || r.isOrphanA || r.isOrphanB).length, 0);
+  const totalParams = sections.reduce((s, sec) => s + sec.rows.length, 0);
+
+  let sectionsHtml = '';
+  for (const { sid, rows } of sections) {
+    const diffCount = rows.filter(r => r.isDiff || r.isOrphanA || r.isOrphanB).length;
+    const badge = diffCount > 0 ? `<span class="sec-badge">${diffCount} diff${diffCount !== 1 ? 's' : ''}</span>` : '';
+    let rowsHtml = '';
+    for (const r of rows) {
+      let cls = '';
+      if (r.isOrphanA)      cls = 'row-only-a';
+      else if (r.isOrphanB) cls = 'row-only-b';
+      else if (r.isDiff)    cls = 'row-diff';
+      rowsHtml += `<tr class="${cls}">
+        <td class="col-name">${esc(r.display)}</td>
+        <td class="col-val">${esc(r.valA)}</td>
+        <td class="col-val">${esc(r.valB)}</td>
+        <td class="col-unit">${esc(r.unit)}</td>
+        <td class="col-type">${esc(r.type)}</td>
+      </tr>`;
+    }
+    sectionsHtml += `
+    <section>
+      <h2>${esc(sid === '__orphans__' ? 'Version-specific parameters' : sid)} ${badge}</h2>
+      <table>
+        <thead><tr>
+          <th>Parameter</th><th>Value A</th><th>Value B</th><th>Unit</th><th>Type</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </section>`;
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>EMU Pro Compare — ${esc(nameA)} vs ${esc(nameB)}</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; font-size: 12px; background: #fff; color: #111; }
+  header { background: #0f3460; color: #fff; padding: 16px 24px; }
+  header h1 { font-size: 18px; color: #4cc9f0; margin-bottom: 8px; }
+  .meta { display: flex; gap: 32px; flex-wrap: wrap; font-size: 12px; color: #a0c4ff; }
+  .meta span { display: flex; flex-direction: column; }
+  .meta strong { color: #fbbf24; }
+  .summary { background: #e8f4fd; border-left: 4px solid #0f3460; padding: 10px 16px; margin: 16px 24px; border-radius: 4px; font-size: 13px; }
+  .summary b { color: #c0392b; }
+  section { margin: 0 24px 24px; }
+  h2 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+       padding: 6px 0 4px; border-bottom: 2px solid #0f3460; margin-bottom: 0;
+       display: flex; align-items: center; gap: 8px; color: #0f3460; }
+  .sec-badge { background: #c0392b; color: #fff; font-size: 10px; font-weight: 700;
+               padding: 1px 6px; border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: Consolas, monospace; }
+  thead th { background: #0f3460; color: #a0c4ff; padding: 4px 8px; text-align: left;
+             font-weight: 700; white-space: nowrap; }
+  tbody td { padding: 3px 8px; border-bottom: 1px solid #dde; overflow: hidden;
+             text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+  tbody tr:nth-child(even) td { background: #f5f5fb; }
+  tbody tr:nth-child(odd)  td { background: #fff; }
+  .row-diff td { background: #fdecea !important; color: #c0392b; font-weight: 600; }
+  .row-only-a td { background: #edfaef !important; color: #27682f; }
+  .row-only-b td { background: #eaf0fb !important; color: #1a4a80; }
+  .col-unit, .col-type { color: #777; font-family: 'Segoe UI', sans-serif; }
+  @media print {
+    body { font-size: 10px; }
+    header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    section { page-break-inside: avoid; }
+    h2 { page-break-after: avoid; }
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>EMU Pro Compare Report</h1>
+  <div class="meta">
+    <span><strong>File A</strong>${esc(nameA)} (v${esc(vA)})</span>
+    <span><strong>File B</strong>${esc(nameB)} (v${esc(vB)})</span>
+    <span><strong>Generated</strong>${esc(now)}</span>
+  </div>
+</header>
+<div class="summary">
+  <b>${totalDiffs} difference${totalDiffs !== 1 ? 's' : ''}</b> across ${totalParams} parameters in ${sections.length} scope${sections.length !== 1 ? 's' : ''}.
+  <span style="margin-left:16px;color:#888">Rows highlighted in red differ · green = File A only · blue = File B only</span>
+</div>
+${sectionsHtml}
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const safeName = (nameA !== '(none)' ? nameA : nameB).replace(/\.emupro$/i, '');
+  a.href     = url;
+  a.download = `${safeName}_compare_report.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+  setStatus(`Exported comparison report for ${sections.length} scopes.`);
+}
+
+function collectScopeRows(sid, fa, fb) {
+  const vA = fa ? fa.version : '?';
+  const vB = fb ? fb.version : '?';
+  const seen = new Set(), paths = [];
+  if (sid === '__orphans__' && state.compat) {
+    for (const p of state.compat.onlyA) { if (!seen.has(p)) { seen.add(p); paths.push(p); } }
+    for (const p of state.compat.onlyB) { if (!seen.has(p)) { seen.add(p); paths.push(p); } }
+  } else {
+    const pfx = `project/scopes/${sid}/`;
+    for (const f of [fa, fb]) {
+      if (!f) continue;
+      for (const p of Object.keys(f.flat)) {
+        if (p.startsWith(pfx) && !seen.has(p)) { seen.add(p); paths.push(p); }
+      }
+    }
+  }
+
+  const rows = [];
+  for (const path of paths) {
+    const evA = fa ? fa.flat[path] : null;
+    const evB = fb ? fb.flat[path] : null;
+    const ev  = evA || evB;
+    const isOrphanA = !!(evA && !evB);
+    const isOrphanB = !!(!evA && evB);
+    const isDiff    = !!(evA && evB && valuesDiffer(evA.value, evB.value));
+    const meta = defLookup(path);
+    let valA, valB;
+    if (isOrphanA) {
+      valA = ev.kind !== 'variable' ? tableSummary(evA) : evA.value;
+      valB = `v${vB} only`;
+    } else if (isOrphanB) {
+      valA = `v${vA} only`;
+      valB = ev.kind !== 'variable' ? tableSummary(evB) : evB.value;
+    } else {
+      valA = ev.kind !== 'variable' ? tableSummary(evA) : (evA ? evA.value : '--');
+      valB = ev.kind !== 'variable' ? tableSummary(evB) : (evB ? evB.value : '--');
+    }
+    rows.push({
+      display: pathToDisplay(path),
+      valA: String(valA),
+      valB: String(valB),
+      unit: meta ? (meta.unit || '') : '',
+      type: meta ? (meta.type || ev.type) : ev.type,
+      isDiff, isOrphanA, isOrphanB,
+    });
+  }
+  return rows;
+}
 </script>
 </body>
 </html>
